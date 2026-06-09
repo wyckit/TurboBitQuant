@@ -101,6 +101,23 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
     }
     
+    const gpuLayersInput = document.getElementById("gpuLayersInput");
+    const gpuLayersValue = document.getElementById("gpuLayersValue");
+    if (gpuLayersInput && gpuLayersValue) {
+        gpuLayersInput.addEventListener("input", (e) => {
+            const val = parseInt(e.target.value);
+            if (val === -1) {
+                gpuLayersValue.textContent = "Auto";
+            } else if (val === 0) {
+                gpuLayersValue.textContent = "0 (CPU only)";
+            } else if (val === 99) {
+                gpuLayersValue.textContent = "99 (Full GPU)";
+            } else {
+                gpuLayersValue.textContent = val;
+            }
+        });
+    }
+    
     // Textarea auto-resize and Enter key binding
     userInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -151,7 +168,7 @@ async function fetchModels() {
         models.forEach(m => {
             const opt = document.createElement("option");
             opt.value = m.filename;
-            opt.textContent = `${m.filename} (${m.size_gb} GB) ${m.is_31b ? '[CPU-only forced]' : ''}`;
+            opt.textContent = `${m.filename} (${m.size_gb} GB)`;
             
             const lowerFilename = m.filename.toLowerCase();
             if (lowerFilename.includes("gemma")) {
@@ -373,6 +390,8 @@ async function startServer() {
     
     const useTurboQuant = tqCheckbox ? tqCheckbox.checked : true;
     const contextSize = contextSelect ? parseInt(contextSelect.value) : 4096;
+    const gpuLayersInput = document.getElementById("gpuLayersInput");
+    const gpuLayers = gpuLayersInput ? parseInt(gpuLayersInput.value) : -1;
     
     updateServerStatusUI("Starting", selectedModel, currentRunningServers);
     
@@ -383,7 +402,8 @@ async function startServer() {
             body: JSON.stringify({ 
                 model: selectedModel,
                 turboquant: useTurboQuant,
-                ctx_size: contextSize
+                ctx_size: contextSize,
+                gpu_layers: gpuLayers
             })
         });
         const data = await response.json();

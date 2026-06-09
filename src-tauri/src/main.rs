@@ -45,6 +45,7 @@ struct StartServerRequest {
     model: String,
     turboquant: Option<bool>,
     ctx_size: Option<usize>,
+    gpu_layers: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -381,17 +382,23 @@ async fn start_server(Json(payload): Json<StartServerRequest>) -> axum::response
         None => return (StatusCode::INTERNAL_SERVER_ERROR, "Compiled C++ backend server (llama-server) not found. Please compile first.".to_string()).into_response(),
     };
     
-    // Auto-adjust GPU layers based on model sizes
-    let mut gpu_layers = 99;
-    if model_file.contains("72B") || model_file.contains("70B") {
-        gpu_layers = 18;
-    } else if ["31B", "32B", "35B", "27B"].iter().any(|x| model_file.contains(x)) {
-        gpu_layers = 32;
-    } else if model_file.contains("122B") {
-        gpu_layers = 10;
-    } else if model_file.contains("397B") {
-        gpu_layers = 0;
-    }
+    // Set GPU layers (manual override or auto-adjusted based on model sizes)
+    let gpu_layers = match payload.gpu_layers.unwrap_or(-1) {
+        -1 => {
+            let mut ngl = 99;
+            if model_file.contains("72B") || model_file.contains("70B") {
+                ngl = 18;
+            } else if ["31B", "32B", "35B", "27B"].iter().any(|x| model_file.contains(x)) {
+                ngl = 32;
+            } else if model_file.contains("122B") {
+                ngl = 10;
+            } else if model_file.contains("397B") {
+                ngl = 0;
+            }
+            ngl
+        }
+        val => std::cmp::max(0, val) as usize,
+    };
     
     // Pick an unused port starting scanning at 8080
     let port = match portpicker::pick_unused_port() {
