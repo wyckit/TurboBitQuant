@@ -120,12 +120,52 @@ async function fetchModels() {
         }
         
         startBtn.disabled = false;
+        
+        // Group models by family branch
+        const gemmaGroup = document.createElement("optgroup");
+        gemmaGroup.label = "Gemma Branch (Recommended)";
+        const qwenGroup = document.createElement("optgroup");
+        qwenGroup.label = "Qwen Branch";
+        const deepseekGroup = document.createElement("optgroup");
+        deepseekGroup.label = "DeepSeek Branch";
+        const otherGroup = document.createElement("optgroup");
+        otherGroup.label = "Other Models";
+        
+        let firstGemmaFilename = null;
+        
         models.forEach(m => {
             const opt = document.createElement("option");
             opt.value = m.filename;
             opt.textContent = `${m.filename} (${m.size_gb} GB) ${m.is_31b ? '[CPU-only forced]' : ''}`;
-            modelSelect.appendChild(opt);
+            
+            const lowerFilename = m.filename.toLowerCase();
+            if (lowerFilename.includes("gemma")) {
+                gemmaGroup.appendChild(opt);
+                if (!firstGemmaFilename) {
+                    firstGemmaFilename = m.filename;
+                }
+            } else if (lowerFilename.includes("deepseek") || lowerFilename.includes("r1")) {
+                deepseekGroup.appendChild(opt);
+            } else if (lowerFilename.includes("qwen")) {
+                qwenGroup.appendChild(opt);
+            } else {
+                otherGroup.appendChild(opt);
+            }
         });
+        
+        if (gemmaGroup.children.length > 0) modelSelect.appendChild(gemmaGroup);
+        if (qwenGroup.children.length > 0) modelSelect.appendChild(qwenGroup);
+        if (deepseekGroup.children.length > 0) modelSelect.appendChild(deepseekGroup);
+        if (otherGroup.children.length > 0) modelSelect.appendChild(otherGroup);
+        
+        // Default selection to first Gemma model if present
+        if (firstGemmaFilename) {
+            modelSelect.value = firstGemmaFilename;
+        } else if (models.length > 0) {
+            modelSelect.value = models[0].filename;
+        }
+        
+        updateMaxTokenCeiling(modelSelect.value);
     } catch (e) {
         console.error("Failed to fetch models", e);
         modelSelect.innerHTML = `<option value="" disabled selected>Error loading models</option>`;
@@ -1143,7 +1183,7 @@ function updateContextLimitOptions(modelName) {
     
     let maxContext = 32768;
     if (modelName.includes("E2B") || modelName.includes("E4B")) {
-        maxContext = 131072;
+        maxContext = 262144;
     } else if (modelName.includes("12B") || modelName.includes("26B")) {
         maxContext = 65536;
     } else if (modelName.includes("31B")) {
