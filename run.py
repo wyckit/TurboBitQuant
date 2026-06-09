@@ -69,8 +69,8 @@ def main():
     parser.add_argument(
         "--gpu-layers", 
         type=int, 
-        default=99,
-        help="Number of layers to offload to GPU. Set to 0 for CPU-only (default: 99 for full GPU offload)"
+        default=-1,
+        help="Number of layers to offload to GPU. Set to -1 for auto-optimized hybrid offloading, or 0 for CPU-only (default: -1)"
     )
     parser.add_argument(
         "--ctx-size", 
@@ -132,12 +132,34 @@ def main():
 
     print(f"[*] Loading model: {model_file}")
 
+    # Resolve GPU layers (auto-adjusted based on model sizes or manual choice)
+    gpu_layers = args.gpu_layers
+    if gpu_layers == -1:
+        filename = os.path.basename(model_file)
+        gpu_layers = 99
+        if "72B" in filename or "70B" in filename:
+            print(f"[*] Large 70B/72B model detected. Using hybrid GPU execution offloading 18 layers.")
+            gpu_layers = 18
+        elif any(x in filename for x in ["31B", "32B", "35B", "27B"]):
+            print(f"[*] Medium-large 27B-35B model detected. Using hybrid GPU execution offloading 32 layers (including Gemma 31B).")
+            gpu_layers = 32
+        elif "122B" in filename:
+            print(f"[*] Large 122B model detected. Offloading 10 layers to GPU.")
+            gpu_layers = 10
+        elif "397B" in filename:
+            print(f"[*] Extreme 397B model detected. Setting to CPU-only (ngl=0).")
+            gpu_layers = 0
+        else:
+            print(f"[*] Auto-tuning GPU layers: Offloading all 99 layers for smaller model.")
+    else:
+        print(f"[*] Custom GPU layers specified: {gpu_layers}")
+
     # Construct execution command
     cmd = [
         exe_path,
         "-m", model_file,
         "-t", str(args.threads),
-        "-ngl", str(args.gpu_layers),
+        "-ngl", str(gpu_layers),
         "-c", str(args.ctx_size),
         "--temp", str(args.temp),
         "-n", str(args.n_predict),

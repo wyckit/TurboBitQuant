@@ -167,20 +167,24 @@ def start_server():
     if not exe_path:
         return jsonify({"error": "Compiled C++ backend server (llama-server) not found. Compile first."}), 500
 
-    # Auto-adjust GPU layers based on model size to prevent out-of-memory crashes
-    gpu_layers = 99
-    if "72B" in model_file or "70B" in model_file:
-        print(f"[*] Large 70B/72B model ({model_file}) detected. Offloading a safe subset of 18 layers to GPU to stay within Metal limits.")
-        gpu_layers = 18
-    elif any(x in model_file for x in ["31B", "32B", "35B", "27B"]):
-        print(f"[*] Medium-large 27B-35B model ({model_file}) detected. Offloading a safe subset of 32 layers to GPU to stay within Metal limits.")
-        gpu_layers = 32
-    elif "122B" in model_file:
-        print(f"[*] Large 122B model ({model_file}) detected. Offloading a safe subset of 10 layers to GPU.")
-        gpu_layers = 10
-    elif "397B" in model_file:
-        print(f"[*] Extreme 397B model ({model_file}) detected. Setting to CPU-only (ngl=0).")
-        gpu_layers = 0
+    gpu_layers_val = data.get("gpu_layers", -1)
+    if gpu_layers_val == -1:
+        # Auto-adjust GPU layers based on model size to prevent out-of-memory crashes
+        gpu_layers = 99
+        if "72B" in model_file or "70B" in model_file:
+            print(f"[*] Large 70B/72B model ({model_file}) detected. Offloading a safe subset of 18 layers to GPU to stay within Metal limits.")
+            gpu_layers = 18
+        elif any(x in model_file for x in ["31B", "32B", "35B", "27B"]):
+            print(f"[*] Medium-large 27B-35B model ({model_file}) detected. Offloading a safe subset of 32 layers to GPU to stay within Metal limits.")
+            gpu_layers = 32
+        elif "122B" in model_file:
+            print(f"[*] Large 122B model ({model_file}) detected. Offloading a safe subset of 10 layers to GPU.")
+            gpu_layers = 10
+        elif "397B" in model_file:
+            print(f"[*] Extreme 397B model ({model_file}) detected. Setting to CPU-only (ngl=0).")
+            gpu_layers = 0
+    else:
+        gpu_layers = max(0, gpu_layers_val)
         
     threads = max(1, multiprocessing.cpu_count() - 2)
     

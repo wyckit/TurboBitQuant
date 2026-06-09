@@ -10,7 +10,6 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 use axum::{
-    body::Body,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -566,18 +565,20 @@ async fn proxy_chat(Json(payload): Json<ChatRequest>) -> axum::response::Respons
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
         
-    let headers = res.headers().clone();
-    let stream = res.bytes_stream();
-    let body = Body::from_stream(stream);
-    
-    let mut response_builder = axum::response::Response::builder()
-        .status(StatusCode::OK);
+    let content_type = res
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| reqwest::header::HeaderValue::from_static("text/event-stream"));
         
-    for (name, val) in headers.iter() {
-        response_builder = response_builder.header(name, val);
-    }
+    let stream = res.bytes_stream();
+    let body = axum::body::Body::from_stream(stream);
     
-    let response = match response_builder.body(body) {
+    let response = match axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, content_type)
+        .body(body)
+    {
         Ok(r) => r.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };

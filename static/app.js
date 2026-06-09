@@ -75,6 +75,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     clearChatBtn.addEventListener("click", clearChat);
     modelSelect.addEventListener("change", () => {
         updateMaxTokenCeiling(modelSelect.value);
+        updateGpuLayersLabel();
     });
     if (contextSelect) {
         contextSelect.addEventListener("change", () => {
@@ -104,17 +105,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     const gpuLayersInput = document.getElementById("gpuLayersInput");
     const gpuLayersValue = document.getElementById("gpuLayersValue");
     if (gpuLayersInput && gpuLayersValue) {
-        gpuLayersInput.addEventListener("input", (e) => {
-            const val = parseInt(e.target.value);
-            if (val === -1) {
-                gpuLayersValue.textContent = "Auto";
-            } else if (val === 0) {
-                gpuLayersValue.textContent = "0 (CPU only)";
-            } else if (val === 99) {
-                gpuLayersValue.textContent = "99 (Full GPU)";
-            } else {
-                gpuLayersValue.textContent = val;
-            }
+        gpuLayersInput.addEventListener("input", () => {
+            updateGpuLayersLabel();
         });
     }
     
@@ -198,6 +190,7 @@ async function fetchModels() {
         }
         
         updateMaxTokenCeiling(modelSelect.value);
+        updateGpuLayersLabel();
     } catch (e) {
         console.error("Failed to fetch models", e);
         modelSelect.innerHTML = `<option value="" disabled selected>Error loading models</option>`;
@@ -527,8 +520,19 @@ async function sendMessage(e) {
         });
         
         if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.error || "Unknown error occurred");
+            let errMsg = "Unknown error occurred";
+            try {
+                const text = await response.text();
+                try {
+                    const err = JSON.parse(text);
+                    errMsg = err.error || err.message || text;
+                } catch (e) {
+                    errMsg = text;
+                }
+            } catch (readErr) {
+                errMsg = `HTTP error ${response.status}: ${response.statusText}`;
+            }
+            throw new Error(errMsg);
         }
         
         // Remove typing indicator once stream starts
@@ -1214,6 +1218,41 @@ function updateMaxTokenCeiling(modelName) {
         tokensInput.value = Math.min(1024, selectedContext);
     }
     tokensValue.textContent = formatTokenCount(tokensInput.value);
+}
+
+// Dynamically update the GPU layers description label under the slider
+function updateGpuLayersLabel() {
+    const gpuLayersInput = document.getElementById("gpuLayersInput");
+    const gpuLayersValue = document.getElementById("gpuLayersValue");
+    if (!gpuLayersInput || !gpuLayersValue) return;
+    
+    const val = parseInt(gpuLayersInput.value);
+    const selectedModel = modelSelect ? modelSelect.value : "";
+    
+    if (val === -1) {
+        if (!selectedModel) {
+            gpuLayersValue.textContent = "Auto";
+        } else {
+            const modelFile = selectedModel.toLowerCase();
+            if (modelFile.includes("72b") || modelFile.includes("70b")) {
+                gpuLayersValue.textContent = "Auto (18 layers - Hybrid)";
+            } else if (["31b", "32b", "35b", "27b"].some(x => modelFile.includes(x))) {
+                gpuLayersValue.textContent = "Auto (32 layers - Hybrid)";
+            } else if (modelFile.includes("122b")) {
+                gpuLayersValue.textContent = "Auto (10 layers - Hybrid)";
+            } else if (modelFile.includes("397b")) {
+                gpuLayersValue.textContent = "Auto (0 layers - CPU only)";
+            } else {
+                gpuLayersValue.textContent = "Auto (99 layers - Full GPU)";
+            }
+        }
+    } else if (val === 0) {
+        gpuLayersValue.textContent = "0 (CPU only)";
+    } else if (val === 99) {
+        gpuLayersValue.textContent = "99 (Full GPU)";
+    } else {
+        gpuLayersValue.textContent = `${val} layers (Hybrid)`;
+    }
 }
 
 // Dynamically enable/disable context select options based on model supported limits
