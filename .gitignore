@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.local
+
+# Virtual environments / dependencies
+node_modules/
+.npm/
+
+# Compilation and builds (llama.cpp)
+bin/
+build/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.exp
+*.lib
+llama.cpp/
+cmake-build-debug/
+cmake-build-release/
+src-tauri/target/
+
+# Large Model Weights (DO NOT commit large GGUFs to git)
+models/*.gguf
+models/**/*.gguf
+models/.cache/
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.suo
