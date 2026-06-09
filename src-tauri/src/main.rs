@@ -176,6 +176,23 @@ struct BenchmarkResponse {
 }
 
 // --------------------------------------------------------------------------
+// Path Resolver
+// --------------------------------------------------------------------------
+fn get_project_path(rel_path: &str) -> PathBuf {
+    let p = PathBuf::from(rel_path);
+    if p.exists() {
+        p
+    } else {
+        let parent = PathBuf::from("..").join(rel_path);
+        if parent.exists() {
+            parent
+        } else {
+            p
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
 // Executable Path Locator
 // --------------------------------------------------------------------------
 fn find_executable() -> Option<PathBuf> {
@@ -190,7 +207,7 @@ fn find_executable() -> Option<PathBuf> {
     ];
     
     for c in candidates {
-        let p = PathBuf::from(&c);
+        let p = get_project_path(&c);
         if p.is_file() {
             return Some(p);
         }
@@ -239,13 +256,13 @@ fn cleanup_dead_servers() {
 
 // API: GET /api/models
 async fn get_models() -> impl IntoResponse {
-    let model_dir = Path::new("models");
+    let model_dir = get_project_path("models");
     if !model_dir.exists() {
         return Json(Vec::<ModelInfo>::new());
     }
     
     let mut models = Vec::new();
-    if let Ok(entries) = fs::read_dir(model_dir) {
+    if let Ok(entries) = fs::read_dir(&model_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("gguf") {
@@ -354,7 +371,7 @@ async fn start_server(Json(payload): Json<StartServerRequest>) -> axum::response
         }
     }
     
-    let model_path = PathBuf::from("models").join(&model_file);
+    let model_path = get_project_path("models").join(&model_file);
     if !model_path.is_file() {
         return (StatusCode::NOT_FOUND, "Model file not found".to_string()).into_response();
     }
@@ -579,7 +596,7 @@ async fn get_benchmarks() -> axum::response::Response {
         MemoryBenchmark { context_size: 32768, f16_mem_mb: 3329.7, tq_mem_mb: 3196.7, saved_mb: 133.0, saved_pct: 4.0, f16_gen_ts: 97.5, tq_gen_ts: 81.4 },
     ];
     
-    let filepath = Path::new("benchmark_results.md");
+    let filepath = get_project_path("benchmark_results.md");
     if !filepath.is_file() {
         return Json(BenchmarkResponse {
             speeds: fallback_speeds,
@@ -590,7 +607,7 @@ async fn get_benchmarks() -> axum::response::Response {
     let mut speeds = Vec::new();
     let mut memory = Vec::new();
     
-    if let Ok(content) = fs::read_to_string(filepath) {
+    if let Ok(content) = fs::read_to_string(&filepath) {
         let mut current_section = "";
         for line in content.lines() {
             let line_trimmed = line.trim();
@@ -792,8 +809,9 @@ async fn perform_download(repo: String, filename: String) {
         .unwrap_or(&filename)
         .to_string();
         
-    let dest_path = PathBuf::from("models").join(&safe_basename);
-    let _ = fs::create_dir_all("models");
+    let models_dir = get_project_path("models");
+    let dest_path = models_dir.join(&safe_basename);
+    let _ = fs::create_dir_all(&models_dir);
     
     {
         let mut downloads = ACTIVE_DOWNLOADS.lock().unwrap();
@@ -954,7 +972,7 @@ async fn start_axum_server(port: u16) {
         .route("/api/download/start", post(start_download))
         .route("/api/download/status", get(get_download_status))
         .route("/api/download/cancel", post(cancel_download))
-        .fallback_service(ServeDir::new("static")); // Tauri executes from project root usually
+        .fallback_service(ServeDir::new(get_project_path("static"))); // Tauri executes from project root usually
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
