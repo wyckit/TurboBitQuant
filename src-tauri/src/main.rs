@@ -89,12 +89,64 @@ struct ServerStatusDetail {
     ctx_size: usize,
 }
 
+fn get_system_ram_gb() -> f64 {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = Command::new("sysctl")
+            .args(&["-n", "hw.memsize"])
+            .output()
+        {
+            if let Ok(s) = String::from_utf8(output.stdout) {
+                if let Ok(bytes) = s.trim().parse::<u64>() {
+                    return bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                }
+            }
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = Command::new("wmic")
+            .args(&["ComputerSystem", "get", "TotalPhysicalMemory"])
+            .output()
+        {
+            if let Ok(s) = String::from_utf8(output.stdout) {
+                let lines: Vec<&str> = s.lines().collect();
+                if lines.len() >= 2 {
+                    if let Ok(bytes) = lines[1].trim().parse::<u64>() {
+                        return bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                    }
+                }
+            }
+        }
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(s) = fs::read_to_string("/proc/meminfo") {
+            for line in s.lines() {
+                if line.starts_with("MemTotal:") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let Ok(kb) = parts[1].parse::<u64>() {
+                            return kb as f64 / (1024.0 * 1024.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    16.0
+}
+
 #[derive(Serialize)]
 struct AppStatusResponse {
     status: String,
     model: Option<String>,
     gpu_layers: usize,
     running_servers: HashMap<String, ServerStatusDetail>,
+    system_ram_gb: f64,
 }
 
 #[derive(Serialize, Clone)]
@@ -276,6 +328,7 @@ async fn get_status() -> axum::response::Response {
         model: active_model,
         gpu_layers,
         running_servers: models_status,
+        system_ram_gb: get_system_ram_gb(),
     }).into_response()
 }
 
@@ -613,6 +666,279 @@ async fn get_benchmarks() -> axum::response::Response {
 }
 
 // --------------------------------------------------------------------------
+// Hugging Face Search & Model Downloader APIs
+// --------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct SearchRequest {
+    q: String,
+}
+
+async fn search_huggingface(axum::extract::Query(params): axum::extract::Query<SearchRequest>) -> impl IntoResponse {
+    let client = match reqwest::Client::builder()
+        .user_agent("turbobitquant")
+        .build() {
+            Ok(c) => c,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+        
+    let url = "https://huggingface.co/api/models";
+    match client.get(url)
+        .query(&[
+            ("search", &params.q),
+            ("filter", &"gguf".to_string()),
+            ("sort", &"downloads".to_string()),
+            ("direction", &"-1".to_string()),
+            ("limit", &"15".to_string()),
+        ])
+        .send()
+        .await {
+            Ok(res) => {
+                if let Ok(bytes) = res.bytes().await {
+                    let body = String::from_utf8_lossy(&bytes).to_string();
+                    return (StatusCode::OK, [("content-type", "application/json")], body).into_response();
+                }
+            }
+            Err(e) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            }
+        }
+        
+    (StatusCode::INTERNAL_SERVER_ERROR, "Failed to query Hugging Face API".to_string()).into_response()
+}
+
+#[derive(Deserialize)]
+struct FilesRequest {
+    repo: String,
+}
+
+async fn get_hf_files(axum::extract::Query(params): axum::extract::Query<FilesRequest>) -> impl IntoResponse {
+    let client = match reqwest::Client::builder()
+        .user_agent("turbobitquant")
+        .build() {
+            Ok(c) => c,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+        
+    let url = format!("https://huggingface.co/api/models/{}", params.repo);
+    
+    match client.get(&url).send().await {
+        Ok(res) => {
+            if let Ok(bytes) = res.bytes().await {
+                let body = String::from_utf8_lossy(&bytes).to_string();
+                return (StatusCode::OK, [("content-type", "application/json")], body).into_response();
+            }
+        }
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    
+    (StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch model details from Hugging Face".to_string()).into_response()
+}
+
+#[derive(Serialize, Clone)]
+struct DownloadState {
+    filename: String,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    percent: f64,
+    speed_mbps: f64,
+    status: String,
+}
+
+static ACTIVE_DOWNLOADS: Lazy<Mutex<HashMap<String, DownloadState>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Deserialize)]
+struct DownloadStartRequest {
+    repo: String,
+    filename: String,
+}
+
+async fn start_download(Json(payload): Json<DownloadStartRequest>) -> impl IntoResponse {
+    let repo = payload.repo.clone();
+    let filename = payload.filename.clone();
+    
+    let safe_basename = Path::new(&filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&filename)
+        .to_string();
+        
+    // Check if already downloading
+    {
+        let downloads = ACTIVE_DOWNLOADS.lock().unwrap();
+        if downloads.contains_key(&safe_basename) {
+            return (StatusCode::BAD_REQUEST, "Model is already downloading".to_string()).into_response();
+        }
+    }
+    
+    // Spawn task to perform download in background
+    tokio::spawn(async move {
+        perform_download(repo, filename).await;
+    });
+    
+    Json(serde_json::json!({ "status": "Started", "filename": safe_basename })).into_response()
+}
+
+async fn perform_download(repo: String, filename: String) {
+    let client = reqwest::Client::new();
+    let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, filename);
+    
+    let safe_basename = Path::new(&filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&filename)
+        .to_string();
+        
+    let dest_path = PathBuf::from("models").join(&safe_basename);
+    let _ = fs::create_dir_all("models");
+    
+    {
+        let mut downloads = ACTIVE_DOWNLOADS.lock().unwrap();
+        downloads.insert(
+            safe_basename.clone(),
+            DownloadState {
+                filename: safe_basename.clone(),
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                percent: 0.0,
+                speed_mbps: 0.0,
+                status: "Connecting".to_string(),
+            },
+        );
+    }
+    
+    let res = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            update_download_status(&safe_basename, "Failed".to_string(), 0, 0, e.to_string());
+            return;
+        }
+    };
+    
+    if !res.status().is_success() {
+        update_download_status(&safe_basename, "Failed".to_string(), 0, 0, format!("HTTP {}", res.status()));
+        return;
+    }
+    
+    let total_size = res.content_length().unwrap_or(0);
+    
+    let mut file = match tokio::fs::File::create(&dest_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            update_download_status(&safe_basename, "Failed".to_string(), 0, 0, e.to_string());
+            return;
+        }
+    };
+    
+    let mut stream = res.bytes_stream();
+    let mut downloaded: u64 = 0;
+    let start_time = std::time::Instant::now();
+    let mut last_update = std::time::Instant::now();
+    
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    
+    while let Some(chunk_result) = stream.next().await {
+        {
+            let downloads = ACTIVE_DOWNLOADS.lock().unwrap();
+            if !downloads.contains_key(&safe_basename) {
+                // Cancelled
+                drop(file);
+                let _ = fs::remove_file(dest_path);
+                return;
+            }
+        }
+        
+        let chunk = match chunk_result {
+            Ok(c) => c,
+            Err(e) => {
+                update_download_status(&safe_basename, "Failed".to_string(), downloaded, total_size, e.to_string());
+                return;
+            }
+        };
+        
+        if let Err(e) = file.write_all(&chunk).await {
+            update_download_status(&safe_basename, "Failed".to_string(), downloaded, total_size, e.to_string());
+            return;
+        }
+        
+        downloaded += chunk.len() as u64;
+        
+        if last_update.elapsed() >= Duration::from_millis(500) {
+            let elapsed_sec = start_time.elapsed().as_secs_f64();
+            let speed_mbps = if elapsed_sec > 0.0 {
+                (downloaded as f64 / (1024.0 * 1024.0)) / elapsed_sec
+            } else {
+                0.0
+            };
+            
+            let percent = if total_size > 0 {
+                (downloaded as f64 / total_size as f64) * 100.0
+            } else {
+                0.0
+            };
+            
+            {
+                let mut downloads = ACTIVE_DOWNLOADS.lock().unwrap();
+                if let Some(state) = downloads.get_mut(&safe_basename) {
+                    state.downloaded_bytes = downloaded;
+                    state.total_bytes = total_size;
+                    state.percent = percent;
+                    state.speed_mbps = speed_mbps;
+                    state.status = "Downloading".to_string();
+                }
+            }
+            last_update = std::time::Instant::now();
+        }
+    }
+    
+    let _ = file.flush().await;
+    
+    {
+        let mut downloads = ACTIVE_DOWNLOADS.lock().unwrap();
+        if let Some(state) = downloads.get_mut(&safe_basename) {
+            state.downloaded_bytes = total_size;
+            state.total_bytes = total_size;
+            state.percent = 100.0;
+            state.speed_mbps = 0.0;
+            state.status = "Completed".to_string();
+        }
+    }
+}
+
+fn update_download_status(filename: &str, status: String, downloaded: u64, total: u64, err_msg: String) {
+    let mut downloads = ACTIVE_DOWNLOADS.lock().unwrap();
+    if let Some(state) = downloads.get_mut(filename) {
+        state.status = if status == "Failed" { format!("Failed: {}", err_msg) } else { status };
+        state.downloaded_bytes = downloaded;
+        state.total_bytes = total;
+    }
+}
+
+async fn get_download_status() -> impl IntoResponse {
+    let downloads = ACTIVE_DOWNLOADS.lock().unwrap();
+    let list: Vec<DownloadState> = downloads.values().cloned().collect();
+    Json(list)
+}
+
+#[derive(Deserialize)]
+struct DownloadCancelRequest {
+    filename: String,
+}
+
+async fn cancel_download(Json(payload): Json<DownloadCancelRequest>) -> impl IntoResponse {
+    let mut downloads = ACTIVE_DOWNLOADS.lock().unwrap();
+    if downloads.remove(&payload.filename).is_some() {
+        Json(serde_json::json!({ "status": "Cancelled" })).into_response()
+    } else {
+        Json(serde_json::json!({ "status": "NotFound" })).into_response()
+    }
+}
+
+// --------------------------------------------------------------------------
 // Axum Engine Starter
 // --------------------------------------------------------------------------
 async fn start_axum_server(port: u16) {
@@ -623,6 +949,11 @@ async fn start_axum_server(port: u16) {
         .route("/api/stop", post(stop_server))
         .route("/api/chat", post(proxy_chat))
         .route("/api/benchmarks", get(get_benchmarks))
+        .route("/api/hf/search", get(search_huggingface))
+        .route("/api/hf/files", get(get_hf_files))
+        .route("/api/download/start", post(start_download))
+        .route("/api/download/status", get(get_download_status))
+        .route("/api/download/cancel", post(cancel_download))
         .fallback_service(ServeDir::new("static")); // Tauri executes from project root usually
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))

@@ -41,6 +41,9 @@
                     <button class="nav-item" id="tabSandboxBtn" data-pane="sandboxPane">
                         <i class="fa-solid fa-wand-magic-sparkles"></i> Design Canvas
                     </button>
+                    <button class="nav-item" id="tabHubBtn" data-pane="hubPane">
+                        <i class="fa-solid fa-cloud-arrow-down"></i> Model Hub
+                    </button>
                 </nav>
                 
                 <div class="server-control-card">
@@ -234,6 +237,62 @@
                         </div>
                         <div class="iframe-container">
                             <iframe id="previewIframe" sandbox="allow-scripts"></iframe>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Model Hub Pane -->
+            <div id="hubPane" class="tab-pane">
+                <header class="chat-header">
+                    <div class="chat-title-info">
+                        <h1>Hugging Face Model Hub</h1>
+                        <p>Search, explore, and download GGUF models directly to your device</p>
+                    </div>
+                </header>
+                
+                <div class="hub-content">
+                    <!-- Search bar section -->
+                    <div class="hub-search-section">
+                        <form id="hubSearchForm" class="search-form">
+                            <div class="search-input-wrapper">
+                                <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                                <input type="text" id="hubSearchInput" placeholder="Search Hugging Face for GGUF models (e.g. gemma, qwen, deepseek)..." required>
+                            </div>
+                            <button type="submit" class="btn btn-primary search-btn"><i class="fa-solid fa-search"></i> Search</button>
+                        </form>
+                    </div>
+                    
+                    <!-- Search results and lists -->
+                    <div class="hub-results-container">
+                        <!-- Left pane: search results (list of repos) -->
+                        <div class="hub-repos-column">
+                            <h3><i class="fa-solid fa-list"></i> Search Results</h3>
+                            <div class="repos-list" id="hubReposList">
+                                <div class="empty-state">
+                                    <i class="fa-solid fa-search empty-icon"></i>
+                                    <p>Search for repositories above to explore available GGUF models</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Right pane: selected repository files/quants -->
+                        <div class="hub-details-column">
+                            <h3><i class="fa-solid fa-circle-info"></i> Model Repository Details</h3>
+                            <div class="repo-details-card" id="hubRepoDetails">
+                                <div class="empty-state">
+                                    <i class="fa-solid fa-arrow-pointer empty-icon"></i>
+                                    <p>Select a repository from the search results list to view available GGUF quantizations and download them</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Active downloads footer -->
+                    <div class="active-downloads-section hidden" id="activeDownloadsSection">
+                        <h3><i class="fa-solid fa-spinner fa-spin"></i> Active Downloads</h3>
+                        <div class="active-downloads-list" id="activeDownloadsList">
+                            <!-- Populated dynamically with progress bars -->
                         </div>
                     </div>
                 </div>

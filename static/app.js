@@ -7,6 +7,9 @@ let statusInterval = null;
 let speedChartInstance = null;
 let memoryChartInstance = null;
 let contextSpeedChartInstance = null;
+let systemRamGb = 16.0; // Dynamic detected total system memory
+let localModelsMetadata = {};
+let activeDownloadPollInterval = null;
 
 // DOM Elements
 const modelSelect = document.getElementById("modelSelect");
@@ -60,6 +63,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await checkServerStatus();
     initTabs();
     initSandbox();
+    initHub();
     
     // Start periodic status checking
     statusInterval = setInterval(checkServerStatus, 3000);
@@ -91,6 +95,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     tokensInput.addEventListener("input", (e) => {
         tokensValue.textContent = formatTokenCount(e.target.value);
     });
+    if (tqCheckbox) {
+        tqCheckbox.addEventListener("change", () => {
+            updateMaxTokenCeiling(modelSelect.value);
+        });
+    }
     
     // Textarea auto-resize and Enter key binding
     userInput.addEventListener("keydown", (e) => {
@@ -110,6 +119,12 @@ async function fetchModels() {
     try {
         const response = await fetch(`${API_BASE}/api/models`);
         const models = await response.json();
+        
+        // Populate localModelsMetadata on the fly
+        localModelsMetadata = {};
+        models.forEach(m => {
+            localModelsMetadata[m.filename] = m.size_gb;
+        });
         
         modelSelect.innerHTML = "";
         
@@ -177,6 +192,10 @@ async function checkServerStatus() {
     try {
         const response = await fetch(`${API_BASE}/api/status`);
         const data = await response.json();
+        
+        if (data.system_ram_gb) {
+            systemRamGb = data.system_ram_gb;
+        }
         
         updateServerStatusUI(data.status, data.model, data.running_servers);
     } catch (e) {
@@ -1192,27 +1211,355 @@ function updateContextLimitOptions(modelName) {
         maxContext = 131072;
     }
     
+    const useTurboQuant = tqCheckbox ? tqCheckbox.checked : true;
+    const modelSizeGB = localModelsMetadata[modelName] || 4.0;
+    
     let hasSelectedValid = false;
     Array.from(contextSelect.options).forEach(opt => {
         const val = parseInt(opt.value);
+        const originalText = getOriginalContextLabel(val);
+        
         if (val > maxContext) {
             opt.disabled = true;
             opt.style.display = "none";
+            opt.textContent = originalText;
         } else {
-            opt.disabled = false;
-            opt.style.display = "block";
-            if (val === maxContext) {
-                opt.selected = true;
-                hasSelectedValid = true;
+            const kvCacheGB = estimateKVCacheSizeGB(modelName, val, useTurboQuant);
+            const totalRequiredGB = modelSizeGB + kvCacheGB;
+            const ramCeiling = systemRamGb * 0.85;
+            
+            if (totalRequiredGB > ramCeiling) {
+                opt.disabled = true;
+                opt.style.display = "block";
+                opt.textContent = `${originalText} (Exceeds RAM)`;
+                opt.classList.add("ram-warning");
+            } else {
+                opt.disabled = false;
+                opt.style.display = "block";
+                opt.textContent = originalText;
+                opt.classList.remove("ram-warning");
+                if (val === maxContext) {
+                    opt.selected = true;
+                    hasSelectedValid = true;
+                }
             }
         }
     });
     
-    if (!hasSelectedValid) {
-        const validOpts = Array.from(contextSelect.options).filter(o => !o.disabled);
-        if (validOpts.length > 0) {
-            validOpts[validOpts.length - 1].selected = true;
+    if (contextSelect.selectedOptions.length === 0 || contextSelect.selectedOptions[0].disabled) {
+        const enabledOpts = Array.from(contextSelect.options).filter(o => !o.disabled);
+        if (enabledOpts.length > 0) {
+            enabledOpts[enabledOpts.length - 1].selected = true;
         }
+    }
+}
+
+function getOriginalContextLabel(val) {
+    if (val >= 1024) {
+        return `${val} (${(val / 1024).toFixed(0)}K)`;
+    }
+    return val;
+}
+
+function estimateKVCacheSizeGB(modelName, contextSize, useTurboQuant) {
+    let kbPerToken = 200;
+    
+    const lower = modelName.toLowerCase();
+    if (lower.includes("e2b") || lower.includes("2b") || lower.includes("3b")) {
+        kbPerToken = 208;
+    } else if (lower.includes("e4b") || lower.includes("7b") || lower.includes("8b") || lower.includes("9b")) {
+        kbPerToken = 336;
+    } else if (lower.includes("12b") || lower.includes("14b")) {
+        kbPerToken = 450;
+    } else if (lower.includes("26b") || lower.includes("27b") || lower.includes("31b") || lower.includes("32b") || lower.includes("35b")) {
+        kbPerToken = 600;
+    } else if (lower.includes("70b") || lower.includes("72b")) {
+        kbPerToken = 1200;
+    }
+    
+    let bytesPerToken = kbPerToken * 1024;
+    if (useTurboQuant) {
+        bytesPerToken = bytesPerToken / 4.0;
+    }
+    
+    const totalBytes = bytesPerToken * contextSize;
+    return totalBytes / (1024.0 * 1024.0 * 1024.0);
+}
+
+// ==========================================================================
+// Hugging Face GGUF Library & Model Downloader Controller
+// ==========================================================================
+function initHub() {
+    const hubSearchForm = document.getElementById("hubSearchForm");
+    const hubSearchInput = document.getElementById("hubSearchInput");
+    
+    if (!hubSearchForm) return;
+    
+    hubSearchForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const query = hubSearchInput.value.trim();
+        if (!query) return;
+        
+        await searchHuggingFace(query);
+    });
+    
+    startDownloadPolling();
+}
+
+async function searchHuggingFace(query) {
+    const hubReposList = document.getElementById("hubReposList");
+    const hubRepoDetails = document.getElementById("hubRepoDetails");
+    
+    hubReposList.innerHTML = `<div class="empty-state"><i class="fa-solid fa-spinner fa-spin empty-icon"></i><p>Searching Hugging Face Hub...</p></div>`;
+    hubRepoDetails.innerHTML = `<div class="empty-state"><i class="fa-solid fa-arrow-pointer empty-icon"></i><p>Select a repository from search results to inspect</p></div>`;
+    
+    try {
+        const response = await fetch(`/api/hf/search?q=${encodeURIComponent(query)}`);
+        if (!response.ok) throw new Error("Search failed");
+        
+        const repos = await response.json();
+        renderReposList(repos);
+    } catch (err) {
+        console.error("HF Search error", err);
+        hubReposList.innerHTML = `<div class="empty-state"><i class="fa-solid fa-circle-exclamation empty-icon" style="color:var(--status-stopped);"></i><p>Search failed: ${err.message}</p></div>`;
+    }
+}
+
+function renderReposList(repos) {
+    const hubReposList = document.getElementById("hubReposList");
+    
+    if (repos.length === 0) {
+        hubReposList.innerHTML = `<div class="empty-state"><i class="fa-solid fa-magnifying-glass empty-icon"></i><p>No compatible GGUF repositories found matching your query</p></div>`;
+        return;
+    }
+    
+    hubReposList.innerHTML = "";
+    repos.forEach(repo => {
+        const card = document.createElement("div");
+        card.className = "repo-card";
+        
+        const downloadsStr = repo.downloads >= 1000 ? `${(repo.downloads / 1000).toFixed(1)}k` : repo.downloads;
+        const likesStr = repo.likes >= 1000 ? `${(repo.likes / 1000).toFixed(1)}k` : repo.likes;
+        
+        card.innerHTML = `
+            <div class="repo-title">${repo.id}</div>
+            <div class="repo-meta">
+                <span><i class="fa-solid fa-arrow-down"></i> ${downloadsStr}</span>
+                <span><i class="fa-solid fa-heart"></i> ${likesStr}</span>
+            </div>
+        `;
+        
+        card.addEventListener("click", () => {
+            document.querySelectorAll(".repo-card").forEach(c => c.classList.remove("active"));
+            card.classList.add("active");
+            
+            loadRepoDetails(repo.id, repo.likes, repo.downloads);
+        });
+        
+        hubReposList.appendChild(card);
+    });
+}
+
+async function loadRepoDetails(repoId, likes, downloads) {
+    const hubRepoDetails = document.getElementById("hubRepoDetails");
+    hubRepoDetails.innerHTML = `<div class="empty-state"><i class="fa-solid fa-spinner fa-spin empty-icon"></i><p>Fetching files from ${repoId}...</p></div>`;
+    
+    try {
+        const response = await fetch(`/api/hf/files?repo=${encodeURIComponent(repoId)}`);
+        if (!response.ok) throw new Error("Failed to fetch repository files");
+        
+        const details = await response.json();
+        const ggufFiles = (details.siblings || [])
+            .map(s => s.rfilename)
+            .filter(name => name.endsWith(".gguf"));
+            
+        renderRepoDetails(repoId, likes, downloads, ggufFiles);
+    } catch (err) {
+        console.error("Error loading repo details", err);
+        hubRepoDetails.innerHTML = `<div class="empty-state"><i class="fa-solid fa-circle-exclamation empty-icon" style="color:var(--status-stopped);"></i><p>Failed to load details: ${err.message}</p></div>`;
+    }
+}
+
+function renderRepoDetails(repoId, likes, downloads, ggufFiles) {
+    const hubRepoDetails = document.getElementById("hubRepoDetails");
+    const downloadsStr = downloads >= 1000 ? `${(downloads / 1000).toFixed(1)}k` : downloads;
+    const likesStr = likes >= 1000 ? `${(likes / 1000).toFixed(1)}k` : likes;
+    
+    let filesHtml = "";
+    if (ggufFiles.length === 0) {
+        filesHtml = `<div class="empty-state"><i class="fa-solid fa-file-excel empty-icon"></i><p>No GGUF models found in the main branch of this repository.</p></div>`;
+    } else {
+        filesHtml = `
+            <div class="quants-section">
+                <h4><i class="fa-solid fa-file-medical"></i> Select Quantization File</h4>
+                <div class="quants-list">
+                    ${ggufFiles.map(filename => {
+                        const displayName = filename.includes("/") ? filename.substring(filename.lastIndexOf("/") + 1) : filename;
+                        return `
+                            <div class="quant-item">
+                                <span class="quant-name" title="${filename}">${displayName}</span>
+                                <div class="quant-actions">
+                                    <button class="btn btn-primary btn-sm dl-btn" data-repo="${repoId}" data-file="${filename}">
+                                        <i class="fa-solid fa-download"></i> Download
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    }).join("")}
+                </div>
+            </div>
+        `;
+    }
+    
+    hubRepoDetails.innerHTML = `
+        <div class="repo-details-card">
+            <div class="detail-header">
+                <div class="detail-title">${repoId.includes("/") ? repoId.split("/")[1] : repoId}</div>
+                <div class="detail-author">by ${repoId.includes("/") ? repoId.split("/")[0] : "community"}</div>
+                <div class="detail-stats">
+                    <span><i class="fa-solid fa-arrow-down"></i> ${downloadsStr} downloads</span>
+                    <span><i class="fa-solid fa-heart" style="color: #ef4444; margin-left: 10px;"></i> ${likesStr} likes</span>
+                </div>
+            </div>
+            ${filesHtml}
+        </div>
+    `;
+    
+    hubRepoDetails.querySelectorAll(".dl-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+            const repo = btn.getAttribute("data-repo");
+            const file = btn.getAttribute("data-file");
+            await triggerDownload(repo, file);
+        });
+    });
+}
+
+async function triggerDownload(repo, filename) {
+    try {
+        const response = await fetch("/api/download/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ repo, filename })
+        });
+        
+        if (!response.ok) {
+            const err = await response.text();
+            throw new Error(err || "Failed to start download");
+        }
+        
+        alert(`Download started for ${filename.includes("/") ? filename.substring(filename.lastIndexOf("/") + 1) : filename}! Progress is tracked below.`);
+        startDownloadPolling();
+    } catch (err) {
+        alert("Error starting download: " + err.message);
+    }
+}
+
+function startDownloadPolling() {
+    if (activeDownloadPollInterval) return;
+    pollDownloads();
+    activeDownloadPollInterval = setInterval(pollDownloads, 1000);
+}
+
+async function pollDownloads() {
+    try {
+        const response = await fetch("/api/download/status");
+        if (!response.ok) return;
+        
+        const downloads = await response.json();
+        renderActiveDownloads(downloads);
+    } catch (err) {
+        console.error("Error polling downloads", err);
+    }
+}
+
+function renderActiveDownloads(downloads) {
+    const activeDownloadsSection = document.getElementById("activeDownloadsSection");
+    const activeDownloadsList = document.getElementById("activeDownloadsList");
+    
+    if (!activeDownloadsSection || !activeDownloadsList) return;
+    
+    if (downloads.length === 0) {
+        activeDownloadsSection.classList.add("hidden");
+        activeDownloadsList.innerHTML = "";
+        if (activeDownloadPollInterval) {
+            clearInterval(activeDownloadPollInterval);
+            activeDownloadPollInterval = null;
+        }
+        return;
+    }
+    
+    activeDownloadsSection.classList.remove("hidden");
+    activeDownloadsList.innerHTML = "";
+    
+    let hasRunningDownloads = false;
+    
+    downloads.forEach(dl => {
+        const card = document.createElement("div");
+        card.className = "download-progress-card";
+        
+        const downloadedGB = (dl.downloaded_bytes / (1024 * 1024 * 1024)).toFixed(2);
+        const totalGB = (dl.total_bytes / (1024 * 1024 * 1024)).toFixed(2);
+        
+        let statsStr = "";
+        let fillClass = "";
+        
+        if (dl.status.startsWith("Failed")) {
+            statsStr = `<span style="color:var(--status-stopped);">${dl.status}</span>`;
+            fillClass = "failed";
+        } else if (dl.status === "Completed") {
+            statsStr = `<span style="color:var(--status-ready);">Completed! Ready.</span>`;
+            fillClass = "completed";
+            fetchModels();
+        } else {
+            statsStr = `${downloadedGB} GB / ${totalGB} GB (${dl.percent.toFixed(1)}%)`;
+            hasRunningDownloads = true;
+        }
+        
+        card.innerHTML = `
+            <div class="progress-header">
+                <span class="progress-title">${dl.filename}</span>
+                <span class="progress-stats">${statsStr}</span>
+            </div>
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill ${fillClass}" style="width: ${dl.percent}%"></div>
+            </div>
+            <div class="progress-footer">
+                <span class="progress-speed">${dl.status === "Downloading" ? `${dl.speed_mbps.toFixed(1)} MB/s` : ""}</span>
+                ${dl.status === "Completed" || dl.status.startsWith("Failed") ? `
+                    <button class="progress-cancel-btn" data-file="${dl.filename}"><i class="fa-solid fa-trash-can"></i> Remove</button>
+                ` : `
+                    <button class="progress-cancel-btn" data-file="${dl.filename}"><i class="fa-solid fa-xmark"></i> Cancel</button>
+                `}
+            </div>
+        `;
+        
+        card.querySelector(".progress-cancel-btn").addEventListener("click", async () => {
+            await cancelDownload(dl.filename);
+        });
+        
+        activeDownloadsList.appendChild(card);
+    });
+    
+    if (!hasRunningDownloads && activeDownloadPollInterval) {
+        clearInterval(activeDownloadPollInterval);
+        activeDownloadPollInterval = null;
+    }
+}
+
+async function cancelDownload(filename) {
+    try {
+        const response = await fetch("/api/download/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename })
+        });
+        
+        if (response.ok) {
+            pollDownloads();
+            fetchModels();
+        }
+    } catch (err) {
+        console.error("Error cancelling download", err);
     }
 }
 
