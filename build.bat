@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 rem TurboBitQuant - Windows compilation script
 
 set BACKEND_DIR=llama.cpp
