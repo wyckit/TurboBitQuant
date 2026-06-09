@@ -17,30 +17,29 @@ rem Check if cmake is installed
 where cmake >nul 2>nul
 if %errorlevel% neq 0 (
     echo [-] Error: 'cmake' is not installed or not in PATH.
-    echo [-] Please install CMake (https://cmake.org/download/) and add it to your PATH.
+    echo [-] Please install CMake ^(https://cmake.org/download/^) and add it to your PATH.
     exit /b 1
 )
 
 rem Check for Visual Studio MSVC environment
 where cl >nul 2>nul
 if %errorlevel% neq 0 (
-    echo [*] Checking for Visual Studio Build Tools location...
-    rem Check common Visual Studio install paths
-    set VS_PATH=""
-    if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" (
-        set VS_PATH="C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
-    ) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat" (
-        set VS_PATH="C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat"
-    ) else if exist "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" (
-        set VS_PATH="C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+    echo [*] Locating Visual Studio C++ toolchain via vswhere...
+    set "VS_PATH="
+    set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+    if exist "!VSWHERE!" (
+        rem -latest covers any edition: Community / Professional / Enterprise / BuildTools
+        for /f "usebackq tokens=*" %%i in (`"!VSWHERE!" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2^>nul`) do (
+            if exist "%%i\VC\Auxiliary\Build\vcvars64.bat" set "VS_PATH=%%i\VC\Auxiliary\Build\vcvars64.bat"
+        )
     )
 
-    if not !VS_PATH! == "" (
-        echo [+] Found Visual Studio environment at !VS_PATH!. Initializing x64 build tools...
-        call !VS_PATH!
+    if defined VS_PATH (
+        echo [+] Found Visual Studio environment at "!VS_PATH!". Initializing x64 build tools...
+        call "!VS_PATH!"
     ) else (
-        echo [!] Warning: Visual Studio compiler 'cl.exe' not found.
-        echo [!] Attempting to run cmake anyway; it might discover your compiler automatically.
+        echo [!] Warning: Visual Studio compiler 'cl.exe' not found via vswhere.
+        echo [!] Attempting to run cmake anyway; the Visual Studio generator may discover it automatically.
     )
 )
 
@@ -48,7 +47,7 @@ rem Check if CUDA is available
 set CUDA_FLAGS=
 where nvcc >nul 2>nul
 if %errorlevel% equ 0 (
-    echo [+] CUDA (nvcc) detected. Building with CUDA acceleration...
+    echo [+] CUDA ^(nvcc^) detected. Building with CUDA acceleration...
     set CUDA_FLAGS=-DGGML_CUDA=ON -DLLAMA_CUDA=ON
 ) else (
     echo [!] CUDA not detected. Building CPU-only version.

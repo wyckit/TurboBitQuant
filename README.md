@@ -48,6 +48,27 @@ TurboBitQuant is a premium local LLM inference harness and frontend client built
    http://localhost:5000/
    ```
 
+### Windows Quick Start (automated)
+
+On Windows you can bootstrap the entire toolchain with a single script. From a
+terminal in the project root:
+
+```bat
+setup.bat                 :: Python + CMake + MSVC, then clone & compile llama.cpp
+setup.bat --with-tauri    :: also install Rust and build the native desktop app
+setup.bat --with-model    :: also download a small starter GGUF model
+setup.bat --check         :: detection only (installs nothing)
+```
+
+`setup.bat` is idempotent — it detects what is already installed (via `winget`
+and `vswhere`) and only installs what is missing. It compiles the inference
+binaries into `bin\` and finishes by reminding you to run `python host.py`.
+Installs that touch system locations may prompt for UAC elevation.
+
+> **Note:** there is no discrete NVIDIA GPU requirement — on machines without
+> CUDA the inference engine is built CPU-only (functional, just slower). On a
+> CUDA-capable machine `build.bat` auto-detects `nvcc` and enables GPU offload.
+
 ### Running Backend Models
 - In the sidebar, select a model from the scanned list.
 - Select your target context length and click **Start Server**.
