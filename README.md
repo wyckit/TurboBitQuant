@@ -26,79 +26,99 @@ TurboBitQuant is a premium local LLM inference harness and frontend client built
 - **Frontend**: Vanilla HTML5, CSS3 (glassmorphic styling, custom scrollbars, layout containers), and JavaScript (ES6+ bindings).
 - **Backend Coordinator**: Flask (Python 3) tracking process lifecycles via `subprocess.Popen` and mapping requests.
 - **Inference Engine**: Hardware-accelerated `llama-server` binaries built on `llama.cpp` using Metal GPU acceleration on Mac.
+- **Mobile Support**:
+  - **Android**: Native Kotlin app with C++ JNI bindings to run `llama.cpp` in-process. See [ANDROID.md](file:///Users/chad.sandor/TurboBitQuant/ANDROID.md).
+  - **iOS**: Native SwiftUI app using in-process `llama.cpp` with Apple Metal GPU acceleration. See [ios/README.md](file:///Users/chad.sandor/TurboBitQuant/ios/README.md).
 
 ---
 
 ## Getting Started
 
-### Prerequisites
-- Python 3.9+ installed
-- Git installed
-- CMake installed
-- Visual Studio Build Tools (Windows) or developer tools (Mac/Linux)
-- Compiled `llama-server` binary inside the `bin/` directory
-- Weights stored in the `models/` directory (GGUF formats)
+### 1. General Desktop Web Setup (Flask & Browser)
 
-### Windows Setup (Using winget)
+#### Prerequisites
+* Python 3.9+ installed
+* Git and CMake installed
+* Visual Studio Build Tools (Windows) or Developer Tools (Mac/Linux)
 
-Install all prerequisites with these commands:
-
-```powershell
-# Install individually:
-winget install Python.Python.3.12
-winget install Git.Git
-winget install Kitware.CMake
-winget install Microsoft.VisualStudio.2022.BuildTools
-
-# Or as a single command:
-winget install Python.Python.3.12 Git.Git Kitware.CMake Microsoft.VisualStudio.2022.BuildTools
-```
-
-After installation, restart your terminal and verify:
-```powershell
-python --version
-git --version
-cmake --version
-```
-
-### Setup and Execution
-
-1. Clone or navigate to the workspace directory.
-
-2. Set up the C++ backend:
+#### Initial Setup
+1. Setup the C++ backend:
    ```bash
    python setup_backend.py
    ```
-
-3. Build the inference engine:
-   - **Windows:**
-     ```bash
-     build.bat
-     ```
-   - **macOS/Linux:**
-     ```bash
-     bash build.sh
-     ```
-
-4. Download models:
+2. Build the inference engine:
+   * **Windows:** `build.bat`
+   * **macOS/Linux:** `bash build.sh`
+3. Download test weights:
    ```bash
    python download_models.py
    ```
 
-5. Launch the backend coordinator:
+#### Execution
+1. Launch the coordinator service:
    ```bash
    python3 host.py
    ```
+2. Navigate in your browser to: `http://localhost:5000/`
+3. In the sidebar, select a model, set context length, click **Start Server**, and use the **Chat Suite** tab once the status dot turns green.
 
-6. Open your browser and navigate to:
-   ```
-   http://localhost:5000/
-   ```
+---
 
-### Running Backend Models
-- In the sidebar, select a model from the scanned list.
-- Select your target context length and click **Start Server**.
-- Once the status dot turns green (**Active**), go to the **Chat Suite** tab and begin chatting.
+### 2. Desktop Native App Setup (Tauri Wrapper)
+
+#### Prerequisites
+* Install [Rust](https://rustup.rs/) toolchain.
+* Install the Tauri CLI tool:
+  ```bash
+  cargo install tauri-cli --version "^2.0.0"
+  ```
+
+#### Execution
+1. From the repository root, run:
+   ```bash
+   cargo tauri dev
+   ```
+   *This automatically starts the Axum coordination server and loads the dashboard in a secure webview frame.*
+
+---
+
+### 3. Android Native App Setup (On-Device JNI Inference)
+
+#### Prerequisites
+* Android Studio (Koala+) & Java 17+ installed.
+* Android SDK Platform, Build-Tools, and NDK version `29.0.13113456` installed.
+
+#### Build Instructions
+1. Set env variables (`JAVA_HOME`, `ANDROID_HOME`, `NDK_HOME`) manually or use the helper script:
+   ```powershell
+   .\setup-android-env.ps1
+   ```
+2. Build the debug application package:
+   * **Windows (PowerShell):** `.\build-android-apk.ps1 -Configuration Debug`
+   * **macOS/Linux:** `./gradlew assembleDebug` (inside the `android/` directory)
+3. Install the compiled APK from `android/app/build/outputs/apk/debug/app-debug.apk` onto your device.
+
+---
+
+### 4. iOS Native App Setup (On-Device SwiftUI Inference)
+
+#### Prerequisites
+* macOS machine with Xcode 15.0+ installed.
+* An Apple Developer account (free personal profile is sufficient).
+
+#### Build Instructions
+1. Compile the native Apple framework:
+   ```bash
+   cd llama.cpp
+   ./build-xcframework.sh
+   ```
+2. Open **Xcode** and open the `/ios` project directory.
+3. Link the framework target:
+   - Select the **TurboBitQuant** target root.
+   - Go to **Frameworks, Libraries, and Embedded Content**.
+   - Drag and drop `llama.cpp/build-apple/llama.xcframework` into the list.
+4. Setup your developer account in **Signing & Capabilities** and specify a unique bundle identifier.
+5. Plug in your physical iOS device, enable **Developer Mode** in your phone's settings, and press **Run** (Command + R) in Xcode.
 
 ---
 
@@ -109,6 +129,8 @@ cmake --version
 │   ├── index.html     # Glassmorphic layout dashboard
 │   ├── style.css      # Thematic layouts, custom scrollbars & styling
 │   └── app.js         # Frontend controller, sandbox, and API proxy bindings
+├── android/           # Native Android (Kotlin/JNI) source project
+├── ios/               # Native iOS (SwiftUI/Metal) source project
 ├── models/            # Directory to place GGUF weights
 ├── bin/               # Compiled llama.cpp executables (llama-server)
 ├── host.py            # Flask server proxy and process manager
