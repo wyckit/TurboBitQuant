@@ -10,16 +10,17 @@ import shutil
 import subprocess
 import multiprocessing
 
-def install_and_import(package):
+def install_and_import(module, package=None):
     import importlib
     try:
-        importlib.import_module(package)
+        importlib.import_module(module)
     except ImportError:
+        package = package or module
         print(f"[*] Dynamic setup: '{package}' is missing. Installing...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
 # Ensure Flask and requests are installed
-install_and_import("Flask")
+install_and_import("flask", "Flask")
 install_and_import("requests")
 
 from flask import Flask, request, Response, jsonify, send_from_directory
@@ -463,5 +464,6 @@ def get_benchmarks():
 if __name__ == "__main__":
     # Ensure static files directory exists
     os.makedirs("static", exist_ok=True)
+    debug = os.environ.get("FLASK_DEBUG") == "1"
     print("[*] Starting TurboBitQuant Host Coordinator on http://localhost:5000")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=debug, use_reloader=False)

@@ -3,7 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0a0b0e">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="TurboBitQuant">
     <title>TurboBitQuant - Gemma 4 Chat Suite</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" href="icons/icon.png">
     <!-- Modern typography -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -45,6 +51,19 @@
                         <i class="fa-solid fa-cloud-arrow-down"></i> Model Hub
                     </button>
                 </nav>
+
+                <div class="connection-card">
+                    <h3><i class="fa-solid fa-network-wired"></i> Android Host</h3>
+                    <div class="form-group">
+                        <label for="apiBaseInput">Backend URL</label>
+                        <input type="url" id="apiBaseInput" placeholder="Same host or http://192.168.1.10:5000">
+                    </div>
+                    <div class="connection-actions">
+                        <button id="apiBaseSaveBtn" class="btn btn-primary btn-sm" type="button"><i class="fa-solid fa-check"></i> Use Host</button>
+                        <button id="apiBaseResetBtn" class="btn btn-icon btn-sm" type="button" title="Use same host"><i class="fa-solid fa-rotate-left"></i></button>
+                    </div>
+                    <div class="api-base-status" id="apiBaseStatus">Using same host</div>
+                </div>
                 
                 <div class="server-control-card">
                     <h3><i class="fa-solid fa-server"></i> Model Backend</h3>

@@ -1,6 +1,41 @@
 // TurboBitQuant - Chat Client Controller
 
-const API_BASE = ""; // Same origin
+const API_BASE_STORAGE_KEY = "turbobitquant.apiBase";
+let API_BASE = resolveInitialApiBase();
+
+function resolveInitialApiBase() {
+    const params = new URLSearchParams(window.location.search);
+    const queryApi = params.get("api");
+    if (queryApi !== null) {
+        const normalized = normalizeApiBase(queryApi);
+        localStorage.setItem(API_BASE_STORAGE_KEY, normalized);
+        return normalized;
+    }
+    return normalizeApiBase(localStorage.getItem(API_BASE_STORAGE_KEY) || "");
+}
+
+function normalizeApiBase(value) {
+    const trimmed = (value || "").trim();
+    if (!trimmed) return "";
+    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+    return withProtocol.replace(/\/+$/, "");
+}
+
+function apiUrl(path) {
+    return `${API_BASE}${path}`;
+}
+
+function isSameHostMode() {
+    return API_BASE === "";
+}
+
+function registerServiceWorker() {
+    if ("serviceWorker" in navigator && window.isSecureContext) {
+        navigator.serviceWorker.register("sw.js").catch((err) => {
+            console.debug("Service worker registration skipped:", err);
+        });
+    }
+}
 let conversationHistory = [];
 let isGenerating = false;
 let statusInterval = null;
@@ -30,6 +65,10 @@ const chatForm = document.getElementById("chatForm");
 const userInput = document.getElementById("userInput");
 const sendBtn = document.getElementById("sendBtn");
 const clearChatBtn = document.getElementById("clearChatBtn");
+const apiBaseInput = document.getElementById("apiBaseInput");
+const apiBaseSaveBtn = document.getElementById("apiBaseSaveBtn");
+const apiBaseResetBtn = document.getElementById("apiBaseResetBtn");
+const apiBaseStatus = document.getElementById("apiBaseStatus");
 
 // Multi-model support elements
 const activeServersSection = document.getElementById("activeServersSection");
@@ -51,6 +90,9 @@ const previewStatus = document.getElementById("previewStatus");
 
 // Initialize application
 document.addEventListener("DOMContentLoaded", async () => {
+    registerServiceWorker();
+    initApiBaseSettings();
+
     // Configure marked options if loaded
     if (typeof marked !== "undefined") {
         marked.setOptions({
@@ -123,10 +165,51 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
 });
 
+function initApiBaseSettings() {
+    if (!apiBaseInput || !apiBaseSaveBtn || !apiBaseResetBtn || !apiBaseStatus) return;
+
+    apiBaseInput.value = API_BASE;
+    renderApiBaseStatus();
+
+    apiBaseSaveBtn.addEventListener("click", async () => {
+        API_BASE = normalizeApiBase(apiBaseInput.value);
+        localStorage.setItem(API_BASE_STORAGE_KEY, API_BASE);
+        renderApiBaseStatus();
+        await reconnectToApi();
+    });
+
+    apiBaseResetBtn.addEventListener("click", async () => {
+        API_BASE = "";
+        apiBaseInput.value = "";
+        localStorage.removeItem(API_BASE_STORAGE_KEY);
+        renderApiBaseStatus();
+        await reconnectToApi();
+    });
+}
+
+function renderApiBaseStatus() {
+    if (!apiBaseStatus) return;
+
+    if (isSameHostMode()) {
+        const hostLabel = window.location.origin && window.location.origin !== "null"
+            ? window.location.origin
+            : "same host";
+        apiBaseStatus.textContent = `Using ${hostLabel}`;
+    } else {
+        apiBaseStatus.textContent = `Using ${API_BASE}`;
+    }
+}
+
+async function reconnectToApi() {
+    await fetchModels();
+    await checkServerStatus();
+    startDownloadPolling();
+}
+
 // Fetch downloaded models from coordinator
 async function fetchModels() {
     try {
-        const response = await fetch(`${API_BASE}/api/models`);
+        const response = await fetch(apiUrl("/api/models"));
         const models = await response.json();
         
         // Populate localModelsMetadata on the fly
@@ -200,7 +283,7 @@ async function fetchModels() {
 // Check if llama-server backend is running
 async function checkServerStatus() {
     try {
-        const response = await fetch(`${API_BASE}/api/status`);
+        const response = await fetch(apiUrl("/api/status"));
         const data = await response.json();
         
         if (data.system_ram_gb) {
@@ -298,7 +381,7 @@ function renderActiveServersSidebar(running_servers) {
         stopModelBtn.addEventListener("click", async () => {
             stopModelBtn.disabled = true;
             try {
-                const response = await fetch(`${API_BASE}/api/stop`, {
+                const response = await fetch(apiUrl("/api/stop"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ model: m })
@@ -389,7 +472,7 @@ async function startServer() {
     updateServerStatusUI("Starting", selectedModel, currentRunningServers);
     
     try {
-        const response = await fetch(`${API_BASE}/api/start`, {
+        const response = await fetch(apiUrl("/api/start"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
@@ -417,7 +500,7 @@ async function startServer() {
 async function stopServer() {
     updateServerStatusUI("Stopping", null, {});
     try {
-        await fetch(`${API_BASE}/api/stop`, {
+        await fetch(apiUrl("/api/stop"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({})
@@ -507,7 +590,7 @@ async function sendMessage(e) {
     const startTime = Date.now();
     
     try {
-        const response = await fetch(`${API_BASE}/api/chat`, {
+        const response = await fetch(apiUrl("/api/chat"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -885,7 +968,7 @@ function initTabs() {
 
 async function loadPerformanceDashboard() {
     try {
-        const response = await fetch(`${API_BASE}/api/benchmarks`);
+        const response = await fetch(apiUrl("/api/benchmarks"));
         const data = await response.json();
         
         renderSpeedChart(data.speeds);
@@ -1373,7 +1456,7 @@ async function searchHuggingFace(query) {
     hubRepoDetails.innerHTML = `<div class="empty-state"><i class="fa-solid fa-arrow-pointer empty-icon"></i><p>Select a repository from search results to inspect</p></div>`;
     
     try {
-        const response = await fetch(`/api/hf/search?q=${encodeURIComponent(query)}`);
+        const response = await fetch(apiUrl(`/api/hf/search?q=${encodeURIComponent(query)}`));
         if (!response.ok) throw new Error("Search failed");
         
         const repos = await response.json();
@@ -1424,7 +1507,7 @@ async function loadRepoDetails(repoId, likes, downloads) {
     hubRepoDetails.innerHTML = `<div class="empty-state"><i class="fa-solid fa-spinner fa-spin empty-icon"></i><p>Fetching files from ${repoId}...</p></div>`;
     
     try {
-        const response = await fetch(`/api/hf/files?repo=${encodeURIComponent(repoId)}`);
+        const response = await fetch(apiUrl(`/api/hf/files?repo=${encodeURIComponent(repoId)}`));
         if (!response.ok) throw new Error("Failed to fetch repository files");
         
         const details = await response.json();
@@ -1495,7 +1578,7 @@ function renderRepoDetails(repoId, likes, downloads, ggufFiles) {
 
 async function triggerDownload(repo, filename) {
     try {
-        const response = await fetch("/api/download/start", {
+        const response = await fetch(apiUrl("/api/download/start"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ repo, filename })
@@ -1521,7 +1604,7 @@ function startDownloadPolling() {
 
 async function pollDownloads() {
     try {
-        const response = await fetch("/api/download/status");
+        const response = await fetch(apiUrl("/api/download/status"));
         if (!response.ok) return;
         
         const downloads = await response.json();
@@ -1607,7 +1690,7 @@ function renderActiveDownloads(downloads) {
 
 async function cancelDownload(filename) {
     try {
-        const response = await fetch("/api/download/cancel", {
+        const response = await fetch(apiUrl("/api/download/cancel"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ filename })

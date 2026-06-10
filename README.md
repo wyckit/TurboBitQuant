@@ -32,18 +32,65 @@ TurboBitQuant is a premium local LLM inference harness and frontend client built
 ## Getting Started
 
 ### Prerequisites
-- Python 3.9+ installed.
-- Compiled `llama-server` binary inside the `bin/` directory.
-- Weights stored in the `models/` directory (GGUF formats).
+- Python 3.9+ installed
+- Git installed
+- CMake installed
+- Visual Studio Build Tools (Windows) or developer tools (Mac/Linux)
+- Compiled `llama-server` binary inside the `bin/` directory
+- Weights stored in the `models/` directory (GGUF formats)
+
+### Windows Setup (Using winget)
+
+Install all prerequisites with these commands:
+
+```powershell
+# Install individually:
+winget install Python.Python.3.12
+winget install Git.Git
+winget install Kitware.CMake
+winget install Microsoft.VisualStudio.2022.BuildTools
+
+# Or as a single command:
+winget install Python.Python.3.12 Git.Git Kitware.CMake Microsoft.VisualStudio.2022.BuildTools
+```
+
+After installation, restart your terminal and verify:
+```powershell
+python --version
+git --version
+cmake --version
+```
 
 ### Setup and Execution
 
 1. Clone or navigate to the workspace directory.
-2. Launch the backend coordinator:
+
+2. Set up the C++ backend:
+   ```bash
+   python setup_backend.py
+   ```
+
+3. Build the inference engine:
+   - **Windows:**
+     ```bash
+     build.bat
+     ```
+   - **macOS/Linux:**
+     ```bash
+     bash build.sh
+     ```
+
+4. Download models:
+   ```bash
+   python download_models.py
+   ```
+
+5. Launch the backend coordinator:
    ```bash
    python3 host.py
    ```
-3. Open your browser and navigate to:
+
+6. Open your browser and navigate to:
    ```
    http://localhost:5000/
    ```
